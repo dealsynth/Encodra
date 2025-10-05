@@ -1,378 +1,340 @@
-import React, { useState, useEffect } from 'react';
-import { Copy, Key, RefreshCw, Lock, Unlock, Eye, EyeOff } from 'lucide-react';
-
-// ============================================================================
-// ENCRYPTION UTILITIES
-// ============================================================================
-
-// PUBLIC MODE - Simple reversible encoding (NOT secure, just obfuscation)
-function encryptPublic(text) {
-  const encoded = btoa(unescape(encodeURIComponent(text)));
-  // Add simple character shift for obfuscation
-  return encoded.split('').map(c => {
-    const code = c.charCodeAt(0);
-    return String.fromCharCode(code + 3);
-  }).join('');
-}
-
-function decryptPublic(encoded) {
-  try {
-    // Reverse the character shift
-    const shifted = encoded.split('').map(c => {
-      const code = c.charCodeAt(0);
-      return String.fromCharCode(code - 3);
-    }).join('');
-    return decodeURIComponent(escape(atob(shifted)));
-  } catch (e) {
-    throw new Error('Invalid data');
-  }
-}
-
-// PRIVATE MODE - Real AES-GCM encryption with master key
-const IV_LENGTH = 12;
-
-async function deriveKeyFromMaster(masterKey) {
-  const enc = new TextEncoder();
-  const keyMaterial = await crypto.subtle.importKey(
-    'raw',
-    enc.encode(masterKey),
-    'PBKDF2',
-    false,
-    ['deriveKey']
-  );
-  
-  const salt = new Uint8Array(16);
-  salt.fill(42); // Fixed salt for same master key = same derived key
-  
-  return crypto.subtle.deriveKey(
-    {
-      name: 'PBKDF2',
-      salt: salt,
-      iterations: 100000,
-      hash: 'SHA-256'
-    },
-    keyMaterial,
-    { name: 'AES-GCM', length: 256 },
-    false,
-    ['encrypt', 'decrypt']
-  );
-}
-
-async function encryptPrivate(plaintext, masterKey) {
-  const iv = crypto.getRandomValues(new Uint8Array(IV_LENGTH));
-  const key = await deriveKeyFromMaster(masterKey);
-  const enc = new TextEncoder();
-  
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: iv },
-    key,
-    enc.encode(plaintext)
-  );
-  
-  // Format: iv(12) + ciphertext
-  const combined = new Uint8Array(iv.length + ciphertext.byteLength);
-  combined.set(iv, 0);
-  combined.set(new Uint8Array(ciphertext), iv.length);
-  
-  return btoa(String.fromCharCode(...combined));
-}
-
-async function decryptPrivate(ciphertext, masterKey) {
-  try {
-    const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0));
-    
-    if (combined.length < IV_LENGTH) {
-      throw new Error('Invalid format');
-    }
-    
-    const iv = combined.slice(0, IV_LENGTH);
-    const data = combined.slice(IV_LENGTH);
-    
-    const key = await deriveKeyFromMaster(masterKey);
-    const decrypted = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: iv },
-      key,
-      data
-    );
-    
-    return new TextDecoder().decode(decrypted);
-  } catch (e) {
-    throw new Error('Wrong key or corrupted data');
-  }
-}
-
-// ============================================================================
-// MAIN APP COMPONENT
-// ============================================================================
-
-export default function DealSynthApp() {
-  const [mode, setMode] = useState('public');
-  const [action, setAction] = useState('encrypt');
-  const [inputText, setInputText] = useState('');
-  const [outputText, setOutputText] = useState('');
-  const [masterKey, setMasterKey] = useState('');
-  const [showKey, setShowKey] = useState(false);
-  const [error, setError] = useState('');
-  const [copied, setCopied] = useState(false);
-
-  const generateMasterKey = () => {
-    const array = new Uint8Array(32);
-    crypto.getRandomValues(array);
-    const key = btoa(String.fromCharCode(...array));
-    setMasterKey(key);
-    setOutputText('');
-    setError('');
-  };
-
-  const handleProcess = async () => {
-    setError('');
-    setOutputText('');
-    setCopied(false);
-
-    if (!inputText.trim()) {
-      setError('Enter some text first');
-      return;
-    }
-
-    try {
-      if (mode === 'public') {
-        if (action === 'encrypt') {
-          const result = encryptPublic(inputText);
-          setOutputText(result);
-        } else {
-          const result = decryptPublic(inputText);
-          setOutputText(result);
-        }
-      } else {
-        // Private mode
-        if (!masterKey) {
-          setError('Generate or enter a master key first');
-          return;
-        }
-
-        if (action === 'encrypt') {
-          const result = await encryptPrivate(inputText, masterKey);
-          setOutputText(result);
-        } else {
-          const result = await decryptPrivate(inputText, masterKey);
-          setOutputText(result);
-        }
-      }
-    } catch (e) {
-      setError(e.message);
-    }
-  };
-
-  const copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 text-white">
-      {/* Header */}
-      <div className="border-b border-white/10 bg-black/30 backdrop-blur-md">
-        <div className="max-w-6xl mx-auto px-6 py-8">
-          <div className="flex items-center justify-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center shadow-lg shadow-purple-500/50">
-              <Lock className="w-5 h-5 text-white" />
-            </div>
-            <h1 className="text-4xl font-bold tracking-tight text-white">
-              Encodra
-            </h1>
-          </div>
-          <p className="text-center text-sm text-gray-400 mt-2">Secure Client-Side Encryption</p>
-        </div>
-      </div>
-
-      <div className="max-w-6xl mx-auto px-4 py-8">
-        {/* Mode Selection */}
-        <div className="grid grid-cols-2 gap-4 mb-8">
-          <button
-            onClick={() => {
-              setMode('public');
-              setOutputText('');
-              setError('');
-            }}
-            className={`p-6 rounded-xl transition-all ${
-              mode === 'public'
-                ? 'bg-gradient-to-br from-purple-600 to-pink-600 shadow-lg shadow-purple-500/50'
-                : 'bg-white/5 hover:bg-white/10'
-            }`}
-          >
-            <Unlock className="w-8 h-8 mb-3 mx-auto" />
-            <h3 className="text-xl font-bold mb-2">PUBLIC</h3>
-            <p className="text-sm text-gray-300">Easy sharing with friends. Anyone can decrypt.</p>
-          </button>
-
-          <button
-            onClick={() => {
-              setMode('private');
-              setOutputText('');
-              setError('');
-            }}
-            className={`p-6 rounded-xl transition-all ${
-              mode === 'private'
-                ? 'bg-gradient-to-br from-purple-600 to-pink-600 shadow-lg shadow-purple-500/50'
-                : 'bg-white/5 hover:bg-white/10'
-            }`}
-          >
-            <Lock className="w-8 h-8 mb-3 mx-auto" />
-            <h3 className="text-xl font-bold mb-2">PRIVATE</h3>
-            <p className="text-sm text-gray-300">Secret messages. Master key required.</p>
-          </button>
-        </div>
-
-        {/* Private Mode - Key Management */}
-        {mode === 'private' && (
-          <div className="bg-black/40 backdrop-blur-sm border border-purple-500/30 rounded-xl p-6 mb-8">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <Key className="w-5 h-5 text-purple-400" />
-                <h3 className="text-lg font-semibold">Master Key</h3>
-              </div>
-              <button
-                onClick={generateMasterKey}
-                className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition text-sm"
-              >
-                <RefreshCw className="w-4 h-4" />
-                Generate New
-              </button>
-            </div>
-
-            {masterKey ? (
-              <div className="space-y-3">
-                <div className="relative">
-                  <input
-                    type={showKey ? 'text' : 'password'}
-                    value={masterKey}
-                    onChange={(e) => setMasterKey(e.target.value)}
-                    className="w-full bg-black/50 border border-purple-500/30 rounded-lg px-4 py-3 pr-24 font-mono text-sm"
-                    placeholder="Your master key"
-                  />
-                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex gap-2">
-                    <button
-                      onClick={() => setShowKey(!showKey)}
-                      className="p-2 hover:bg-white/10 rounded transition"
-                    >
-                      {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                    <button
-                      onClick={() => copyToClipboard(masterKey)}
-                      className="p-2 hover:bg-white/10 rounded transition"
-                    >
-                      <Copy className="w-4 h-4" />
-                    </button>
-                  </div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Encodra - by ! ERROR</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: system-ui, -apple-system, sans-serif; }
+    </style>
+</head>
+<body>
+    <div id="app" class="min-h-screen bg-gradient-to-br from-gray-900 via-purple-900 to-gray-900 text-white">
+        <!-- Header -->
+        <div class="border-b border-white/10 bg-black/30 backdrop-blur-md">
+            <div class="max-w-6xl mx-auto px-6 py-8">
+                <div class="flex items-center justify-center gap-3">
+                    <div class="w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center shadow-lg shadow-purple-500/50">
+                        <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                        </svg>
+                    </div>
+                    <h1 class="text-4xl font-bold tracking-tight text-white">Encodra</h1>
                 </div>
-                <p className="text-xs text-gray-400">
-                  Save this key securely. Share it only with people you trust. All your messages use this key.
-                </p>
-              </div>
-            ) : (
-              <p className="text-sm text-gray-400">Generate a master key to start encrypting private messages.</p>
-            )}
-          </div>
-        )}
-
-        {/* Action Toggle */}
-        <div className="flex gap-2 mb-6">
-          <button
-            onClick={() => {
-              setAction('encrypt');
-              setOutputText('');
-              setError('');
-            }}
-            className={`flex-1 py-3 rounded-lg font-medium transition ${
-              action === 'encrypt'
-                ? 'bg-purple-600 text-white'
-                : 'bg-white/5 hover:bg-white/10'
-            }`}
-          >
-            Encrypt
-          </button>
-          <button
-            onClick={() => {
-              setAction('decrypt');
-              setOutputText('');
-              setError('');
-            }}
-            className={`flex-1 py-3 rounded-lg font-medium transition ${
-              action === 'decrypt'
-                ? 'bg-purple-600 text-white'
-                : 'bg-white/5 hover:bg-white/10'
-            }`}
-          >
-            Decrypt
-          </button>
-        </div>
-
-        {/* Main Interface */}
-        <div className="grid md:grid-cols-2 gap-6">
-          {/* Input */}
-          <div>
-            <label className="block text-sm font-medium mb-2 text-gray-300">
-              {action === 'encrypt' ? 'Your Message' : 'Encrypted Text'}
-            </label>
-            <textarea
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              className="w-full h-64 bg-black/40 border border-white/10 rounded-xl p-4 text-white resize-none focus:outline-none focus:border-purple-500/50 transition"
-              placeholder={action === 'encrypt' ? 'Type your message here...' : 'Paste encrypted text here...'}
-            />
-          </div>
-
-          {/* Output */}
-          <div>
-            <label className="block text-sm font-medium mb-2 text-gray-300">
-              {action === 'encrypt' ? 'Encrypted Output' : 'Decrypted Message'}
-            </label>
-            <div className="relative">
-              <textarea
-                value={outputText}
-                readOnly
-                className="w-full h-64 bg-black/40 border border-purple-500/30 rounded-xl p-4 text-purple-300 resize-none font-mono text-sm"
-                placeholder="Output will appear here..."
-              />
-              {outputText && (
-                <button
-                  onClick={() => copyToClipboard(outputText)}
-                  className="absolute top-4 right-4 flex items-center gap-2 px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition text-sm"
-                >
-                  <Copy className="w-4 h-4" />
-                  {copied ? 'Copied!' : 'Copy'}
-                </button>
-              )}
+                <p class="text-center text-sm text-gray-400 mt-2">Secure Client-Side Encryption</p>
             </div>
-          </div>
         </div>
 
-        {/* Process Button */}
-        <button
-          onClick={handleProcess}
-          className="w-full mt-6 py-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 rounded-xl font-bold text-lg transition shadow-lg shadow-purple-500/30"
-        >
-          {action === 'encrypt' ? 'ENCRYPT' : 'DECRYPT'}
-        </button>
+        <div class="max-w-6xl mx-auto px-4 py-8">
+            <!-- Mode Selection -->
+            <div class="grid grid-cols-2 gap-4 mb-8">
+                <button id="publicBtn" class="p-6 rounded-xl transition-all bg-gradient-to-br from-purple-600 to-pink-600 shadow-lg shadow-purple-500/50">
+                    <svg class="w-8 h-8 mb-3 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 9.9-1"></path>
+                    </svg>
+                    <h3 class="text-xl font-bold mb-2">PUBLIC</h3>
+                    <p class="text-sm text-gray-300">Easy sharing with friends. Anyone can decrypt.</p>
+                </button>
 
-        {/* Error Display */}
-        {error && (
-          <div className="mt-4 p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm">
-            {error}
-          </div>
-        )}
+                <button id="privateBtn" class="p-6 rounded-xl transition-all bg-white/5 hover:bg-white/10">
+                    <svg class="w-8 h-8 mb-3 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                    </svg>
+                    <h3 class="text-xl font-bold mb-2">PRIVATE</h3>
+                    <p class="text-sm text-gray-300">Secret messages. Master key required.</p>
+                </button>
+            </div>
 
-        {/* Footer Info */}
-        <div className="mt-12 text-center text-sm text-gray-500">
-          <p className="mb-2">
-            {mode === 'public' 
-              ? 'PUBLIC mode: Easy obfuscation for casual sharing. Not cryptographically secure.'
-              : 'PRIVATE mode: Real encryption. Keep your master key safe.'}
-          </p>
-          <p>All processing happens in your browser. No data leaves your device.</p>
+            <!-- Key Management (Private Mode Only) -->
+            <div id="keySection" class="bg-black/40 backdrop-blur-sm border border-purple-500/30 rounded-xl p-6 mb-8 hidden">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center gap-3">
+                        <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
+                        </svg>
+                        <h3 class="text-lg font-semibold">Master Key</h3>
+                    </div>
+                    <button id="generateBtn" class="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition text-sm">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <polyline points="23 4 23 10 17 10"></polyline>
+                            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                        </svg>
+                        Generate New
+                    </button>
+                </div>
+                <div id="keyContent" class="text-sm text-gray-400">Generate a master key to start encrypting private messages.</div>
+            </div>
+
+            <!-- Action Toggle -->
+            <div class="flex gap-2 mb-6">
+                <button id="encryptBtn" class="flex-1 py-3 rounded-lg font-medium transition bg-purple-600 text-white">
+                    Encrypt
+                </button>
+                <button id="decryptBtn" class="flex-1 py-3 rounded-lg font-medium transition bg-white/5 hover:bg-white/10">
+                    Decrypt
+                </button>
+            </div>
+
+            <!-- Main Interface -->
+            <div class="grid md:grid-cols-2 gap-6">
+                <div>
+                    <label class="block text-sm font-medium mb-2 text-gray-300" id="inputLabel">Your Message</label>
+                    <textarea id="inputText" class="w-full h-64 bg-black/40 border border-white/10 rounded-xl p-4 text-white resize-none focus:outline-none focus:border-purple-500/50 transition" placeholder="Type your message here..."></textarea>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-2 text-gray-300" id="outputLabel">Encrypted Output</label>
+                    <div class="relative">
+                        <textarea id="outputText" readonly class="w-full h-64 bg-black/40 border border-purple-500/30 rounded-xl p-4 text-purple-300 resize-none font-mono text-sm" placeholder="Output will appear here..."></textarea>
+                        <button id="copyBtn" class="hidden absolute top-4 right-4 items-center gap-2 px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition text-sm">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                            Copy
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Process Button -->
+            <button id="processBtn" class="w-full mt-6 py-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 rounded-xl font-bold text-lg transition shadow-lg shadow-purple-500/30">
+                ENCRYPT
+            </button>
+
+            <!-- Error Display -->
+            <div id="errorBox" class="hidden mt-4 p-4 bg-red-500/10 border border-red-500/30 rounded-xl text-red-400 text-sm"></div>
+
+            <!-- Footer Info -->
+            <div class="mt-12 text-center text-sm text-gray-500">
+                <p class="mb-2" id="modeInfo">PUBLIC mode: Easy obfuscation for casual sharing. Not cryptographically secure.</p>
+                <p>All processing happens in your browser. No data leaves your device.</p>
+            </div>
         </div>
-      </div>
+
+        <!-- Premium Footer -->
+        <footer class="border-t border-white/10 bg-black/30 backdrop-blur-md mt-16">
+            <div class="max-w-6xl mx-auto px-6 py-12">
+                <div class="text-center mb-8">
+                    <p class="text-gray-400 text-sm mb-4">
+                        Powered by <span class="font-semibold text-white">DealSynth</span> — Elite AI Tools for Digital Hustlers
+                    </p>
+                    <p class="text-gray-500 text-xs">© 2025 DealSynth. All rights reserved.</p>
+                </div>
+
+                <div class="flex items-center justify-center gap-6 mb-6 text-xs text-gray-500">
+                    <a href="#" class="hover:text-gray-300 transition">Terms</a>
+                    <span class="text-gray-700">•</span>
+                    <a href="#" class="hover:text-gray-300 transition">Privacy</a>
+                    <span class="text-gray-700">•</span>
+                    <a href="#" class="hover:text-gray-300 transition">Contact</a>
+                </div>
+
+                <div class="text-center">
+                    <p class="text-xs text-gray-600">
+                        Crafted with <span class="text-yellow-500">⚡</span> by <span class="font-medium text-gray-400">! ERROR</span>
+                    </p>
+                </div>
+            </div>
+        </footer>
     </div>
-  );
-}
+
+    <script>
+        // State
+        let mode = 'public';
+        let action = 'encrypt';
+        let masterKey = '';
+
+        // Elements
+        const publicBtn = document.getElementById('publicBtn');
+        const privateBtn = document.getElementById('privateBtn');
+        const encryptBtn = document.getElementById('encryptBtn');
+        const decryptBtn = document.getElementById('decryptBtn');
+        const inputText = document.getElementById('inputText');
+        const outputText = document.getElementById('outputText');
+        const processBtn = document.getElementById('processBtn');
+        const errorBox = document.getElementById('errorBox');
+        const copyBtn = document.getElementById('copyBtn');
+        const keySection = document.getElementById('keySection');
+        const generateBtn = document.getElementById('generateBtn');
+        const keyContent = document.getElementById('keyContent');
+        const inputLabel = document.getElementById('inputLabel');
+        const outputLabel = document.getElementById('outputLabel');
+        const modeInfo = document.getElementById('modeInfo');
+
+        // Crypto functions
+        function encryptPublic(text) {
+            const encoded = btoa(unescape(encodeURIComponent(text)));
+            return encoded.split('').map(c => String.fromCharCode(c.charCodeAt(0) + 3)).join('');
+        }
+
+        function decryptPublic(encoded) {
+            const shifted = encoded.split('').map(c => String.fromCharCode(c.charCodeAt(0) - 3)).join('');
+            return decodeURIComponent(escape(atob(shifted)));
+        }
+
+        async function deriveKeyFromMaster(mk) {
+            const enc = new TextEncoder();
+            const keyMaterial = await crypto.subtle.importKey('raw', enc.encode(mk), 'PBKDF2', false, ['deriveKey']);
+            const salt = new Uint8Array(16).fill(42);
+            return crypto.subtle.deriveKey(
+                { name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' },
+                keyMaterial,
+                { name: 'AES-GCM', length: 256 },
+                false,
+                ['encrypt', 'decrypt']
+            );
+        }
+
+        async function encryptPrivate(plaintext, mk) {
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const key = await deriveKeyFromMaster(mk);
+            const enc = new TextEncoder();
+            const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(plaintext));
+            const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+            combined.set(iv, 0);
+            combined.set(new Uint8Array(ciphertext), iv.length);
+            return btoa(String.fromCharCode(...combined));
+        }
+
+        async function decryptPrivate(ciphertext, mk) {
+            const combined = Uint8Array.from(atob(ciphertext), c => c.charCodeAt(0));
+            const iv = combined.slice(0, 12);
+            const data = combined.slice(12);
+            const key = await deriveKeyFromMaster(mk);
+            const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
+            return new TextDecoder().decode(decrypted);
+        }
+
+        // Event handlers
+        publicBtn.addEventListener('click', () => {
+            mode = 'public';
+            publicBtn.className = 'p-6 rounded-xl transition-all bg-gradient-to-br from-purple-600 to-pink-600 shadow-lg shadow-purple-500/50';
+            privateBtn.className = 'p-6 rounded-xl transition-all bg-white/5 hover:bg-white/10';
+            keySection.classList.add('hidden');
+            outputText.value = '';
+            errorBox.classList.add('hidden');
+            modeInfo.textContent = 'PUBLIC mode: Easy obfuscation for casual sharing. Not cryptographically secure.';
+        });
+
+        privateBtn.addEventListener('click', () => {
+            mode = 'private';
+            privateBtn.className = 'p-6 rounded-xl transition-all bg-gradient-to-br from-purple-600 to-pink-600 shadow-lg shadow-purple-500/50';
+            publicBtn.className = 'p-6 rounded-xl transition-all bg-white/5 hover:bg-white/10';
+            keySection.classList.remove('hidden');
+            outputText.value = '';
+            errorBox.classList.add('hidden');
+            modeInfo.textContent = 'PRIVATE mode: Real encryption. Keep your master key safe.';
+        });
+
+        encryptBtn.addEventListener('click', () => {
+            action = 'encrypt';
+            encryptBtn.className = 'flex-1 py-3 rounded-lg font-medium transition bg-purple-600 text-white';
+            decryptBtn.className = 'flex-1 py-3 rounded-lg font-medium transition bg-white/5 hover:bg-white/10';
+            processBtn.textContent = 'ENCRYPT';
+            inputLabel.textContent = 'Your Message';
+            outputLabel.textContent = 'Encrypted Output';
+            inputText.placeholder = 'Type your message here...';
+            outputText.value = '';
+            errorBox.classList.add('hidden');
+        });
+
+        decryptBtn.addEventListener('click', () => {
+            action = 'decrypt';
+            decryptBtn.className = 'flex-1 py-3 rounded-lg font-medium transition bg-purple-600 text-white';
+            encryptBtn.className = 'flex-1 py-3 rounded-lg font-medium transition bg-white/5 hover:bg-white/10';
+            processBtn.textContent = 'DECRYPT';
+            inputLabel.textContent = 'Encrypted Text';
+            outputLabel.textContent = 'Decrypted Message';
+            inputText.placeholder = 'Paste encrypted text here...';
+            outputText.value = '';
+            errorBox.classList.add('hidden');
+        });
+
+        generateBtn.addEventListener('click', () => {
+            const array = new Uint8Array(32);
+            crypto.getRandomValues(array);
+            masterKey = btoa(String.fromCharCode(...array));
+            keyContent.innerHTML = `
+                <div class="space-y-3">
+                    <div class="relative">
+                        <input type="password" id="keyInput" value="${masterKey}" class="w-full bg-black/50 border border-purple-500/30 rounded-lg px-4 py-3 pr-24 font-mono text-sm text-white">
+                        <div class="absolute right-2 top-1/2 -translate-y-1/2 flex gap-2">
+                            <button id="toggleKey" class="p-2 hover:bg-white/10 rounded transition">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                    <circle cx="12" cy="12" r="3"></circle>
+                                </svg>
+                            </button>
+                            <button id="copyKey" class="p-2 hover:bg-white/10 rounded transition">
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                    <p class="text-xs text-gray-400">Save this key securely. Share it only with people you trust. All your messages use this key.</p>
+                </div>
+            `;
+            document.getElementById('toggleKey').addEventListener('click', () => {
+                const inp = document.getElementById('keyInput');
+                inp.type = inp.type === 'password' ? 'text' : 'password';
+            });
+            document.getElementById('copyKey').addEventListener('click', () => {
+                navigator.clipboard.writeText(masterKey);
+            });
+            document.getElementById('keyInput').addEventListener('input', (e) => {
+                masterKey = e.target.value;
+            });
+        });
+
+        processBtn.addEventListener('click', async () => {
+            errorBox.classList.add('hidden');
+            outputText.value = '';
+            copyBtn.classList.add('hidden');
+
+            if (!inputText.value.trim()) {
+                errorBox.textContent = 'Enter some text first';
+                errorBox.classList.remove('hidden');
+                return;
+            }
+
+            try {
+                let result;
+                if (mode === 'public') {
+                    result = action === 'encrypt' ? encryptPublic(inputText.value) : decryptPublic(inputText.value);
+                } else {
+                    if (!masterKey) {
+                        errorBox.textContent = 'Generate or enter a master key first';
+                        errorBox.classList.remove('hidden');
+                        return;
+                    }
+                    result = action === 'encrypt' 
+                        ? await encryptPrivate(inputText.value, masterKey)
+                        : await decryptPrivate(inputText.value, masterKey);
+                }
+                outputText.value = result;
+                copyBtn.classList.remove('hidden');
+                copyBtn.classList.add('flex');
+            } catch (e) {
+                errorBox.textContent = e.message || 'An error occurred';
+                errorBox.classList.remove('hidden');
+            }
+        });
+
+        copyBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(outputText.value);
+            copyBtn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></svg> Copied!`;
+            setTimeout(() => {
+                copyBtn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> Copy`;
+            }, 2000);
+        });
+    </script>
+</body>
+</html>
