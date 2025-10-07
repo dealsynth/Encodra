@@ -57,7 +57,7 @@
                         <svg class="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"></path>
                         </svg>
-                        <h3 class="text-lg font-semibold" id="keyTitle">Master Key</h3>
+                        <h3 class="text-lg font-semibold">Master Key</h3>
                     </div>
                     <button id="generateBtn" class="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition text-sm">
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -149,6 +149,8 @@
         let mode = 'public';
         let action = 'encrypt';
         let masterKey = '';
+        let encryptInput = '';
+        let decryptInput = '';
 
         // Elements
         const publicBtn = document.getElementById('publicBtn');
@@ -211,55 +213,41 @@
             return new TextDecoder().decode(decrypted);
         }
 
-        // Event handlers
-        publicBtn.addEventListener('click', () => {
-            mode = 'public';
-            publicBtn.className = 'p-6 rounded-xl transition-all bg-gradient-to-br from-purple-600 to-pink-600 shadow-lg shadow-purple-500/50';
-            privateBtn.className = 'p-6 rounded-xl transition-all bg-white/5 hover:bg-white/10';
-            keySection.classList.add('hidden');
-            outputText.value = '';
-            errorBox.classList.add('hidden');
-            modeInfo.textContent = 'PUBLIC mode: Easy obfuscation for casual sharing. Not cryptographically secure.';
-        });
+        // Update key section based on mode
+        function updateKeySection() {
+            if (mode === 'private') {
+                if (action === 'encrypt') {
+                    generateBtn.classList.remove('hidden');
+                    if (!masterKey) {
+                        keyContent.innerHTML = 'Generate a master key to start encrypting private messages.';
+                    } else {
+                        renderKeyInput();
+                    }
+                } else {
+                    generateBtn.classList.add('hidden');
+                    keyContent.innerHTML = `
+                        <div class="space-y-3">
+                            <p class="text-sm text-gray-300 mb-3">Enter the sender's master key to decrypt their message:</p>
+                            <div class="relative">
+                                <input type="password" id="keyInput" value="${masterKey}" placeholder="Paste the master key here..." class="w-full bg-black/50 border border-purple-500/30 rounded-lg px-4 py-3 pr-16 font-mono text-sm text-white placeholder-gray-600">
+                                <div class="absolute right-2 top-1/2 -translate-y-1/2">
+                                    <button id="toggleKey" class="p-2 hover:bg-white/10 rounded transition">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                            <circle cx="12" cy="12" r="3"></circle>
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <p class="text-xs text-gray-400">This key must match the one used to encrypt the message.</p>
+                        </div>
+                    `;
+                    attachKeyInputListeners();
+                }
+            }
+        }
 
-        privateBtn.addEventListener('click', () => {
-            mode = 'private';
-            privateBtn.className = 'p-6 rounded-xl transition-all bg-gradient-to-br from-purple-600 to-pink-600 shadow-lg shadow-purple-500/50';
-            publicBtn.className = 'p-6 rounded-xl transition-all bg-white/5 hover:bg-white/10';
-            keySection.classList.remove('hidden');
-            outputText.value = '';
-            errorBox.classList.add('hidden');
-            modeInfo.textContent = 'PRIVATE mode: Real encryption. Keep your master key safe.';
-        });
-
-        encryptBtn.addEventListener('click', () => {
-            action = 'encrypt';
-            encryptBtn.className = 'flex-1 py-3 rounded-lg font-medium transition bg-purple-600 text-white';
-            decryptBtn.className = 'flex-1 py-3 rounded-lg font-medium transition bg-white/5 hover:bg-white/10';
-            processBtn.textContent = 'ENCRYPT';
-            inputLabel.textContent = 'Your Message';
-            outputLabel.textContent = 'Encrypted Output';
-            inputText.placeholder = 'Type your message here...';
-            outputText.value = '';
-            errorBox.classList.add('hidden');
-        });
-
-        decryptBtn.addEventListener('click', () => {
-            action = 'decrypt';
-            decryptBtn.className = 'flex-1 py-3 rounded-lg font-medium transition bg-purple-600 text-white';
-            encryptBtn.className = 'flex-1 py-3 rounded-lg font-medium transition bg-white/5 hover:bg-white/10';
-            processBtn.textContent = 'DECRYPT';
-            inputLabel.textContent = 'Encrypted Text';
-            outputLabel.textContent = 'Decrypted Message';
-            inputText.placeholder = 'Paste encrypted text here...';
-            outputText.value = '';
-            errorBox.classList.add('hidden');
-        });
-
-        generateBtn.addEventListener('click', () => {
-            const array = new Uint8Array(32);
-            crypto.getRandomValues(array);
-            masterKey = btoa(String.fromCharCode(...array));
+        function renderKeyInput() {
             keyContent.innerHTML = `
                 <div class="space-y-3">
                     <div class="relative">
@@ -282,22 +270,112 @@
                     <p class="text-xs text-gray-400">Save this key securely. Share it only with people you trust. All your messages use this key.</p>
                 </div>
             `;
-            document.getElementById('toggleKey').addEventListener('click', () => {
-                const inp = document.getElementById('keyInput');
-                inp.type = inp.type === 'password' ? 'text' : 'password';
-            });
-            document.getElementById('copyKey').addEventListener('click', () => {
-                navigator.clipboard.writeText(masterKey);
-            });
-            document.getElementById('keyInput').addEventListener('input', (e) => {
-                masterKey = e.target.value;
-            });
+            attachKeyInputListeners();
+        }
+
+        function attachKeyInputListeners() {
+            const toggleBtn = document.getElementById('toggleKey');
+            const copyKeyBtn = document.getElementById('copyKey');
+            const keyInput = document.getElementById('keyInput');
+
+            if (toggleBtn) {
+                toggleBtn.addEventListener('click', () => {
+                    const inp = document.getElementById('keyInput');
+                    inp.type = inp.type === 'password' ? 'text' : 'password';
+                });
+            }
+
+            if (copyKeyBtn) {
+                copyKeyBtn.addEventListener('click', () => {
+                    navigator.clipboard.writeText(masterKey);
+                });
+            }
+
+            if (keyInput) {
+                keyInput.addEventListener('input', (e) => {
+                    masterKey = e.target.value;
+                });
+            }
+        }
+
+        // Event handlers
+        publicBtn.addEventListener('click', () => {
+            mode = 'public';
+            publicBtn.className = 'p-6 rounded-xl transition-all bg-gradient-to-br from-purple-600 to-pink-600 shadow-lg shadow-purple-500/50';
+            privateBtn.className = 'p-6 rounded-xl transition-all bg-white/5 hover:bg-white/10';
+            keySection.classList.add('hidden');
+            outputText.value = '';
+            errorBox.classList.add('hidden');
+            modeInfo.textContent = 'PUBLIC mode: Easy obfuscation for casual sharing. Not cryptographically secure.';
+        });
+
+        privateBtn.addEventListener('click', () => {
+            mode = 'private';
+            privateBtn.className = 'p-6 rounded-xl transition-all bg-gradient-to-br from-purple-600 to-pink-600 shadow-lg shadow-purple-500/50';
+            publicBtn.className = 'p-6 rounded-xl transition-all bg-white/5 hover:bg-white/10';
+            keySection.classList.remove('hidden');
+            outputText.value = '';
+            errorBox.classList.add('hidden');
+            modeInfo.textContent = 'PRIVATE mode: Real encryption. Keep your master key safe.';
+            updateKeySection();
+        });
+
+        encryptBtn.addEventListener('click', () => {
+            // Save current decrypt input before switching
+            if (action === 'decrypt') {
+                decryptInput = inputText.value;
+            }
+            
+            action = 'encrypt';
+            encryptBtn.className = 'flex-1 py-3 rounded-lg font-medium transition bg-purple-600 text-white';
+            decryptBtn.className = 'flex-1 py-3 rounded-lg font-medium transition bg-white/5 hover:bg-white/10';
+            processBtn.textContent = 'ENCRYPT';
+            inputLabel.textContent = 'Your Message';
+            outputLabel.textContent = 'Encrypted Output';
+            inputText.placeholder = 'Type your message here...';
+            inputText.value = encryptInput;
+            outputText.value = '';
+            errorBox.classList.add('hidden');
+            updateKeySection();
+        });
+
+        decryptBtn.addEventListener('click', () => {
+            // Save current encrypt input before switching
+            if (action === 'encrypt') {
+                encryptInput = inputText.value;
+            }
+            
+            action = 'decrypt';
+            decryptBtn.className = 'flex-1 py-3 rounded-lg font-medium transition bg-purple-600 text-white';
+            encryptBtn.className = 'flex-1 py-3 rounded-lg font-medium transition bg-white/5 hover:bg-white/10';
+            processBtn.textContent = 'DECRYPT';
+            inputLabel.textContent = 'Encrypted Text';
+            outputLabel.textContent = 'Decrypted Message';
+            inputText.placeholder = 'Paste encrypted text here...';
+            inputText.value = decryptInput;
+            outputText.value = '';
+            errorBox.classList.add('hidden');
+            updateKeySection();
+        });
+
+        generateBtn.addEventListener('click', () => {
+            const array = new Uint8Array(32);
+            crypto.getRandomValues(array);
+            masterKey = btoa(String.fromCharCode(...array));
+            renderKeyInput();
         });
 
         processBtn.addEventListener('click', async () => {
             errorBox.classList.add('hidden');
             outputText.value = '';
             copyBtn.classList.add('hidden');
+
+            // Save current input to appropriate state
+            if (action === 'encrypt') {
+                encryptInput = inputText.value;
+            } else {
+                decryptInput = inputText.value;
+            }
 
             if (!inputText.value.trim()) {
                 errorBox.textContent = 'Enter some text first';
@@ -311,7 +389,9 @@
                     result = action === 'encrypt' ? encryptPublic(inputText.value) : decryptPublic(inputText.value);
                 } else {
                     if (!masterKey) {
-                        errorBox.textContent = 'Generate or enter a master key first';
+                        errorBox.textContent = action === 'encrypt' 
+                            ? 'Generate or enter a master key first'
+                            : 'Enter the sender\'s master key to decrypt';
                         errorBox.classList.remove('hidden');
                         return;
                     }
